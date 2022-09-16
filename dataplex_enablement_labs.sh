@@ -7,7 +7,7 @@
 
 export LOCATION=us-central1
 export LAKES="projects/${PROJECT_DATAGOV}/locations/${LOCATION}/lakes"
-debug=""
+debug="echo"
 err="log/err"
 #dataplex resource
 
@@ -39,7 +39,7 @@ dprp() {
   if [[ ! -f $fn ]]; then 
     echo > $fn
     for a in $($1); do
-      $debug $a 
+      #$debug gcloud dataplex $1 get-iam-policy $a 
       gcloud dataplex $1 get-iam-policy $a --format json \
       | jq -r --arg res $a '.bindings[]|"\($res):\(.members[]|select(.|test("^service"))|.):\(.role)"' 2>$err | tee -a $fn
     done
@@ -84,13 +84,17 @@ log_echo() {
 }
 
 secure() {
+  customer_sa="serviceAccount:customer-sa@${PROJECT_DATAGOV}.iam.gserviceaccount.com" 
+  transactions_sa="serviceAccount:cc-trans-sa@${PROJECT_DATAGOV}.iam.gserviceaccount.com"
+  transactions_consumer_sa="serviceAccount:cc-trans-consumer-sa@${PROJECT_DATAGOV}.iam.gserviceaccount.com"
+  merchant_sa="serviceAccount:merchant-sa@${PROJECT_DATAGOV}.iam.gserviceaccount.com" 
+
   echo > secure_cmds
   log_echo secure '# Task 1 Step 1 - provide data owner to service account on source domain'   
-  echo gcloud dataplex lakes add-iam-policy-binding prod-customer-source-domain --location $LOCATION  --role roles/dataplex.dataOwner --member="serviceAccount:customer-sa@${PROJECT_DATAGOV}.iam.gserviceaccount.com" >> secure_cmds
+  echo gcloud dataplex lakes add-iam-policy-binding prod-customer-source-domain --location $LOCATION  --role roles/dataplex.dataOwner --member="$customer_sa" >> secure_cmds
   
   log_echo secure '# Task 1 Step 2 provide cc sa data reader on product zone in customer domain '
-  echo gcloud dataplex zones add-iam-policy-binding customer-data-product-zone  --location $LOCATION --lake=prod-customer-source-domain --member="serviceAccount:cc-trans-consumer-sa@${PROJECT_DATAGOV}.iam.gserviceaccount.com" --role roles/dataplex.dataReader >> secure_cmds
-
+  echo gcloud dataplex zones add-iam-policy-binding $LAKES/prod-customer-source-domain/zones/customer-data-product-zone --member="$transactions_consumer_sa" --role roles/dataplex.dataReader >> secure_cmds
   log_echo secure '# Task 2 Step 1,2,3 give the service accounts owner on da-reports asset and reader on common utility zone in central operation domain '
   sas="$(  gcloud iam service-accounts list --format json | jq '.[]|select(.email|test("customer|merchant|cc-"))|"serviceAccount:\(.email)"')"
   for sa in $sas; do
@@ -119,6 +123,31 @@ secure() {
   echo gcloud dataplex assets add-iam-policy-binding ${LAKES}/central-operations-domain/zones/operations-data-product-zone/assets/dlp-reports --member="$dlp_sa" --role=roles/dataplex.dataOwner >> secure_cmds
  log_echo secure '# Task 2 Step 7 - monitor security via api '
  echo gcloud dataplex assets describe ${LAKES}/central-operations-domain/zones/operations-data-product-zone/assets/audit-data --format json >> secure_cmds
+
+  log_echo secure '# task 3 step 1 - merchant domain permissions dataowner'
+  echo gcloud dataplex lakes add-iam-policy-binding prod-merchant-source-domain --location $LOCATION  --role roles/dataplex.dataOwner --member="$merchant_sa" >> secure_cmds
+  log_echo secure '# task 3 step 2 - merchant domain permissions cc-transaction data reader permissions'
+  echo gcloud dataplex zones add-iam-policy-binding $LAKES/prod-merchant-source-domain/zones/merchant-data-product-zone --member=$transactions_consumer_sa --role roles/dataplex.dataReader >> secure_cmds
+
+  log_echo secure '# task 4 step 1 - transaction domain owner  permissions'
+  echo gcloud dataplex lakes add-iam-policy-binding $LAKES/prod-transactions-source-domain --role roles/dataplex.dataOwner --member="$transactions_sa" >> secure_cmds
+  log_echo secure '# task 4 step 2 -  transaction domain owner  permissions'
+  echo gcloud dataplex zones add-iam-policy-binding $LAKES/prod-transactions-source-domain/zones/transactions-data-product-zone --member="$transactions_sa" --role roles/dataplex.dataReader >> secure_cmds
+
+  log_echo secure '# task 5 step 1 - transaction consumer domain owner  permissions'
+  echo gcloud dataplex lakes add-iam-policy-binding $LAKES/prod-transactions-consumer-domain --role roles/dataplex.dataOwner --member="$transactions_consumer_sa" >> secure_cmds
+
+  log_echo secure '# task 6 step 1 - monitor'
+  echo gcloud dataplex assets describe $LAKES/central-operations-domain/zones/operations-data-product-zone/assets/audit-data --format json >> secure_cmds
+
+}
+
+dp_res_ls() {
+      task=${1:-customer}
+      ext=${2:-.parquet}
+      bucket=$(gcloud dataplex assets list --zone $LAKES/prod-$task-source-domain/zones/$task-curated-zone --format json | jq -r '.[]| select (.name|test("curated-data"))|.resourceSpec.name')
+      echo "listing files in curated-zone bucket asset for $task ($bucket)"
+      gsutil ls -r gs://$bucket | grep $ext 
 }
 
 curate() {
@@ -133,43 +162,40 @@ curate() {
       echo name:curate-$task-raw-data
       echo lake:$task source domain
       echo job_args.source:$(grep $task-raw-data demo_assets)
-      echo type:PARQUET
+      echo job_args.type:PARQUET
       echo job_args.dst:$(grep $task-curated-data demo_assets)
       sa=$task ; [[ $sa == "transactions" ]] && sa="cc-trans-sa"
       echo job_args.sa:"$(gcloud iam service-accounts list --format="(email)" | grep $sa)"
       echo job_args.network:$network
+      echo
+      echo TESTING: when the join is done you can test files are created in the zone with dp_res_ls $task
+
   done 
 
 }
 
-quality() {
-echo dq
-
-}
-
-quality() {
-echo dq
-  echo task 1 
-  echo name:curate-customer-raw-data
-  echo lake:customer source domain
-  echo job_args.source:$(grep customer-raw-data demo_assets)
-  echo type:PARQUET
-  echo job_args.dst:$(grep customer-curated-data demo_assets)
-  echo job_args.sa:"$(gcloud iam service-accounts list --format="(email)" | grep customer-sa)"
-  echo job_args.network:$(gcloud compute networks subnets list --format="value(selfLink)")
-  echo TODO: update this when the APIs are ready and also add dataflow APIs for the time being
-
-}
-
-quality() {
-echo dq
+data_quality() {
 
   echo TODO: update this when the APIs are ready and also add dataflow APIs for the time being
 
-}
 
-quality() {
-echo dq
+  for task in customer merchant transactions 
+  do 
+      sa=${task}_sa
+      echo 
+      echo task  - $task data quality task 
+      echo --------------------------------------
+      echo lake:prod-${task}-source-domain
+      echo name:dq-$task-data-quality-task
+      echo job_args.dq_apec:${PROJECT_DATAGOV}_dataplex_process/${task}-source-configs/dq_${task}_gcs_data.yaml
+      echo job_args.rsults_table:${PROJECT_DATAGOV}.central_dq_results
+      echo job_args.table_name:dq_results
+      echo $sa:${!sa}
+      echo
+      #echo TESTING: when the join is done you can test files are created in the zone with dp_res_ls $task
+
+  done 
+
 }
 
 dlp() {
