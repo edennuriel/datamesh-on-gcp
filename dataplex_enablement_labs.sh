@@ -198,87 +198,49 @@ data_quality() {
 
 }
 
-dlp() {
-echo dlp 
+classify() {
+  echo '# Task 1 - dlp SA access to data store via dlp.admin role'
+  project_num=$(gcloud projects list --filter="${PROJECT_DATASTO}" --format="value(PROJECT_NUMBER)")
+  gcloud projects add-iam-policy-binding ${PROJECT_DATASTO} --member="serviceAccount:service-${project_num}@dlp-api.iam.gserviceaccount.com" --role="roles/dlp.admin" 
+  echo create dlp scan configuration in the UI create a new template
+  echo "The lab suggest using: projects/mbdatagov-137194260/inspectTemplates/marsbank_dlp_template - but it does not seem to be accessible."
+  echo send data profile to ${PROJECT_DATAGOV} central_dlp_data dlp_data_profiles
+
 }
 
-dag_runs() {
-echo dags
+data_products() {
+ move_data customer
+ move_data merchant
+ move_data transactions
 }
 
 
 
-move_customer_data() {
-gcloud dataplex tasks create cust-curated-refined \
-    --project=mbdatagov-137194260 \
+move_data() {
+  data=${1:-customer}
+  sa=${data}_sa
+gcloud dataplex tasks create $data-curated-refined \
+    --project=${PROJECT_DATAGOV} \
     --location=us-central1 \
- --vpc-sub-network-name=projects/mbdatagov-137194260/regions/us-central1/subnetworks/default \
-    --lake=prod-customer-source-domain \
+ --vpc-sub-network-name=projects/${PROJECT_DATAGOV}/regions/us-central1/subnetworks/default \
+    --lake=prod-$data-source-domain \
     --trigger-type=ON_DEMAND \
-    --execution-service-account=customer-sa@mbdatagov-137194260.iam.gserviceaccount.com \
+    --execution-service-account=$(echo ${!sa} | sed s/serviceAccount://) \
     --spark-main-class="com.google.cloud.dataproc.templates.main.DataProcTemplate" \
-    --spark-file-uris="gs://mbdatagov-137194260_dataplex_process/common/log4j-spark-driver-template.properties" \
-    --container-image-java-jars="gs://mbdatagov-137194260_dataplex_process/common/dataproc-templates-1.0-SNAPSHOT.jar" \
+    --spark-file-uris="gs://${PROJECT_DATAGOV}_dataplex_process/common/log4j-spark-driver-template.properties" \
+    --container-image-java-jars="gs://${PROJECT_DATAGOV}_dataplex_process/common/dataproc-templates-1.0-SNAPSHOT.jar" \
     --execution-args=^::^TASK_ARGS="--template=DATAPLEXGCSTOBQ,\
-        --templateProperty=project.id=mbdatastore-137194260,\
-        --templateProperty=dataplex.gcs.bq.target.dataset=customer_refined_data,\
-        --templateProperty=gcs.bigquery.temp.bucket.name=mbdatagov-137194260_dataplex_temp,\
+        --templateProperty=project.id=${PROJECT_DATASTO},\
+        --templateProperty=dataplex.gcs.bq.target.dataset=${data}_refined_data,\
+        --templateProperty=gcs.bigquery.temp.bucket.name=${PROJECT_DATAGOV}_dataplex_temp,\
         --templateProperty=dataplex.gcs.bq.save.mode=append,\
         --templateProperty=dataplex.gcs.bq.incremental.partition.copy=yes,\
-        --dataplexEntity=projects/mbdatagov-137194260/locations/us-central1/lakes/prod-customer-source-domain/zones/customer-raw-zone/entities/customers_data,\
+        --dataplexEntity=projects/${PROJECT_DATAGOV}/locations/us-central1/lakes/prod-${data}-source-domain/zones/${data}-raw-zone/entities/${data}s_data,\
         --partitionField=ingest_date,\
         --partitionType=DAY,\
-        --targetTableName=customers_data,\
-        --customSqlGcsPath=gs://mbdatagov-137194260_dataplex_process/customer-source-configs/customercustom.sql"
+        --targetTableName=${data}s_data,\
+        --customSqlGcsPath=gs://${PROJECT_DATAGOV}_dataplex_process/${data}-source-configs/${data}custom.sql" 
 }
-move_merchant_data() {
-gcloud dataplex tasks create merchant-raw-to-refined \
-    --project=mbdatagov-137194260 \
-    --location=us-central1 \
- --vpc-sub-network-name=projects/mbdatagov-137194260/regions/us-central1/subnetworks/default \
-    --lake=prod-merchant-source-domain \
-    --trigger-type=ON_DEMAND \
-    --execution-service-account=merchant-sa@mbdatagov-137194260.iam.gserviceaccount.com \
-    --spark-main-class="com.google.cloud.dataproc.templates.main.DataProcTemplate" \
-    --spark-file-uris="gs://mbdatagov-137194260_dataplex_process/common/log4j-spark-driver-template.properties" \
-    --container-image-java-jars="gs://mbdatagov-137194260_dataplex_process/common/dataproc-templates-1.0-SNAPSHOT.jar" \
-    --execution-args=^::^TASK_ARGS="--template=DATAPLEXGCSTOBQ,\
-        --templateProperty=project.id=mbdatastore-137194260,\
-        --templateProperty=dataplex.gcs.bq.target.dataset=merchants_refined_data,\
-        --templateProperty=gcs.bigquery.temp.bucket.name=mbdatagov-137194260_dataplex_temp,\
-        --templateProperty=dataplex.gcs.bq.save.mode=append,\
-        --templateProperty=dataplex.gcs.bq.incremental.partition.copy=yes,\
-        --dataplexEntity=projects/mbdatagov-137194260/locations/us-central1/lakes/prod-merchant-source-domain/zones/merchant-raw-zone/entities/merchants_data,\
-        --partitionField=ingest_date,\
-        --partitionType=DAY,\
-        --targetTableName=merchants_data,\
-        --customSqlGcsPath=gs://mbdatagov-137194260_dataplex_process/merchant-source-configs/merchantcustom.sql"
-
-}
-move_transactions_data(){
-gcloud dataplex tasks create auth-raw-to-refined-10 \
-    --project=mbdatagov-137194260 \
-    --location=us-central1 \
- --vpc-sub-network-name=projects/mbdatagov-137194260/regions/us-central1/subnetworks/default \
-    --lake=prod-transactions-source-domain \
-    --trigger-type=ON_DEMAND \
-    --execution-service-account=cc-trans-sa@mbdatagov-137194260.iam.gserviceaccount.com \
-    --spark-main-class="com.google.cloud.dataproc.templates.main.DataProcTemplate" \
-    --spark-file-uris="gs://mbdatagov-137194260_dataplex_process/common/log4j-spark-driver-template.properties" \
-    --container-image-java-jars="gs://mbdatagov-137194260_dataplex_process/common/dataproc-templates-1.0-SNAPSHOT.jar" \
-    --execution-args=^::^TASK_ARGS="--template=DATAPLEXGCSTOBQ,\
-        --templateProperty=project.id=mbdatastore-137194260,\
-        --templateProperty=dataplex.gcs.bq.target.dataset=pos_auth_refined_data,\
-        --templateProperty=gcs.bigquery.temp.bucket.name=mbdatagov-137194260_dataplex_temp,\
-        --templateProperty=dataplex.gcs.bq.save.mode=append,\
-        --templateProperty=dataplex.gcs.bq.incremental.partition.copy=yes,\
-        --dataplexEntity=projects/mbdatagov-137194260/locations/us-central1/lakes/prod-transactions-source-domain/zones/transactions-raw-zone/entities/auth_data,\
-        --partitionField=ingest_date,\
-        --partitionType=DAY,\
-        --targetTableName=auth_data,\
-        --customSqlGcsPath=gs://mbdatagov-137194260_dataplex_process/transactions-source-configs/transcustom.sql"
-}
-
 
 csv_to_parquet(){
 
