@@ -209,21 +209,25 @@ classify() {
 }
 
 data_products() {
- move_data customer
- move_data merchant
- move_data transactions
+ move_data customer customers_data customer_refined_data customercustom
+ move_data merchant merchants_data merchants_refined_data merchantcustom 
+ move_data transactions auth_data pos_auth_refined_data transcustom
 }
 
 
 
 move_data() {
-  data=${1:-customer}
-  sa=${data}_sa
-gcloud dataplex tasks create $data-curated-refined \
+  zone=$1
+  entity=$2
+  ds=$3
+  sql=${4}.sql
+  sa=${zone}_sa
+
+  gcloud dataplex tasks create $zone-curated-refined \
     --project=${PROJECT_DATAGOV} \
     --location=us-central1 \
- --vpc-sub-network-name=projects/${PROJECT_DATAGOV}/regions/us-central1/subnetworks/default \
-    --lake=prod-$data-source-domain \
+    --vpc-sub-network-name=projects/${PROJECT_DATAGOV}/regions/us-central1/subnetworks/default \
+    --lake=prod-$zone-source-domain \
     --trigger-type=ON_DEMAND \
     --execution-service-account=$(echo ${!sa} | sed s/serviceAccount://) \
     --spark-main-class="com.google.cloud.dataproc.templates.main.DataProcTemplate" \
@@ -231,15 +235,15 @@ gcloud dataplex tasks create $data-curated-refined \
     --container-image-java-jars="gs://${PROJECT_DATAGOV}_dataplex_process/common/dataproc-templates-1.0-SNAPSHOT.jar" \
     --execution-args=^::^TASK_ARGS="--template=DATAPLEXGCSTOBQ,\
         --templateProperty=project.id=${PROJECT_DATASTO},\
-        --templateProperty=dataplex.gcs.bq.target.dataset=${data}_refined_data,\
+        --templateProperty=dataplex.gcs.bq.target.dataset=$ds,\
         --templateProperty=gcs.bigquery.temp.bucket.name=${PROJECT_DATAGOV}_dataplex_temp,\
         --templateProperty=dataplex.gcs.bq.save.mode=append,\
         --templateProperty=dataplex.gcs.bq.incremental.partition.copy=yes,\
-        --dataplexEntity=projects/${PROJECT_DATAGOV}/locations/us-central1/lakes/prod-${data}-source-domain/zones/${data}-raw-zone/entities/${data}s_data,\
+        --dataplexEntity=projects/${PROJECT_DATAGOV}/locations/us-central1/lakes/prod-${zone}-source-domain/zones/${zone}-raw-zone/entities/${entity},\
         --partitionField=ingest_date,\
         --partitionType=DAY,\
-        --targetTableName=${data}s_data,\
-        --customSqlGcsPath=gs://${PROJECT_DATAGOV}_dataplex_process/${data}-source-configs/${data}custom.sql" 
+        --targetTableName=${entity},\
+        --customSqlGcsPath=gs://${PROJECT_DATAGOV}_dataplex_process/${zone}-source-configs/${sql}"
 }
 
 csv_to_parquet(){
@@ -256,5 +260,21 @@ csv_to_parquet(){
   --subnetwork=$network --service-account-email=$sa --parameters="$parms" --
 }
 
+remove_composer() {
+  composer_env=$(gcloud composer environments list --format="value(name)")
+  [[ -n $composer_env ]]  && -q gcloud composer environments delete $composer_env
+}
 
 
+add_composer_tf() {
+  # terraform apply + tain composer module + target setup
+  popd oneclick/demo-gov/terraform/
+  terraform taint module.composer.null_resource.dag_setup #make sure dags are copied
+  terraform apply  -var project_id_governance=$PROJECT_DATAGOV -var project_id_storage=${PROJECT_DATASTO} -var ldap=edn -var user_ip_range=10.6.0.0/24
+  #if that does not work, need to do the taint and then target...
+  #terraform apply  -var project_id_governance=$PROJECT_DATAGOV -var project_id_storage=${PROJECT_DATASTO} -var ldap=edn -var user_ip_range=10.6.0.0/24 --target module.composer.null_resource.dag_setup
+}
+
+launch_local_airflow() {
+  echo quick setup
+}
